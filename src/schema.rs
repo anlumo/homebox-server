@@ -45,6 +45,23 @@ impl QueryRoot {
             .map(|(_, value)| bson::from_slice(&value).map_err(|err| err.into()))
             .collect()
     }
+    async fn item(
+        &self,
+        ctx: &Context<'_>,
+        id: String,
+        container: String,
+    ) -> Result<Option<Item>, Error> {
+        let item_uuid: Uuid = id.parse()?;
+        let db = ctx.data_unchecked::<Database>();
+        let container_uuid: Uuid = container.parse()?;
+        let key: Vec<u8> = std::iter::once(Item::TYPE)
+            .chain(container_uuid.as_bytes().iter().copied())
+            .chain(item_uuid.as_bytes().iter().copied())
+            .collect();
+        db.get(key)?
+            .map(|item| bson::from_slice(&item).map_err(|err| err.into()))
+            .transpose()
+    }
 }
 
 pub struct MutationRoot;
@@ -55,6 +72,7 @@ impl MutationRoot {
         &self,
         ctx: &Context<'_>,
         #[graphql(desc = "Name of the new container")] name: String,
+        #[graphql(desc = "Physical location of container")] location: String,
     ) -> Result<Uuid, Error> {
         let uuid = Uuid::new_v4();
         let key: Vec<u8> = std::iter::once(Container::TYPE)
@@ -68,10 +86,55 @@ impl MutationRoot {
                 created: now,
                 updated: now,
                 name,
+                location,
             })?,
         )?;
         Ok(uuid)
     }
+    async fn update_container(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Primary key of a container")] id: String,
+        #[graphql(desc = "New name")] name: Option<String>,
+        #[graphql(desc = "New physical location")] location: Option<String>,
+    ) -> Result<bool, Error> {
+        let uuid: Uuid = id.parse()?;
+        let db = ctx.data_unchecked::<Database>();
+        let key: Vec<u8> = std::iter::once(Container::TYPE)
+            .chain(uuid.as_bytes().iter().copied())
+            .collect();
+        if let Some(mut container) = db
+            .get(&key)?
+            .map(|value| bson::from_slice::<Container>(&value))
+            .transpose()?
+        {
+            if let Some(name) = name {
+                container.name = name;
+            }
+            if let Some(location) = location {
+                container.location = location;
+            }
+            container.updated = Utc::now();
+            db.put(key, bson::to_vec(&container)?)?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+    async fn delete_container(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Primary key of a container")] id: String,
+    ) -> Result<bool, Error> {
+        let uuid: Uuid = id.parse()?;
+        let db = ctx.data_unchecked::<Database>();
+        let key: Vec<u8> = std::iter::once(Container::TYPE)
+            .chain(uuid.as_bytes().iter().copied())
+            .collect();
+        db.delete(key)?;
+        Ok(true)
+    }
+
     async fn add_item(
         &self,
         ctx: &Context<'_>,
@@ -100,6 +163,93 @@ impl MutationRoot {
         )?;
         Ok(uuid)
     }
+    async fn update_item(
+        &self,
+        ctx: &Context<'_>,
+        id: String,
+        container: String,
+        name: Option<String>,
+        quantity: Option<usize>,
+        description: Option<String>,
+    ) -> Result<bool, Error> {
+        let item_uuid: Uuid = id.parse()?;
+        let db = ctx.data_unchecked::<Database>();
+        let container_uuid: Uuid = container.parse()?;
+        let key: Vec<u8> = std::iter::once(Item::TYPE)
+            .chain(container_uuid.as_bytes().iter().copied())
+            .chain(item_uuid.as_bytes().iter().copied())
+            .collect();
+
+        if let Some(mut item) = db
+            .get(&key)?
+            .map(|value| bson::from_slice::<Item>(&value))
+            .transpose()?
+        {
+            if let Some(name) = name {
+                item.name = name;
+            }
+            if let Some(quantity) = quantity {
+                item.quantity = quantity;
+            }
+            if let Some(description) = description {
+                item.description = description;
+            }
+            item.updated = Utc::now();
+            db.put(key, bson::to_vec(&item)?)?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+    async fn move_item(
+        &self,
+        ctx: &Context<'_>,
+        id: String,
+        from_container: String,
+        to_container: String,
+    ) -> Result<bool, Error> {
+        let item_uuid: Uuid = id.parse()?;
+        let db = ctx.data_unchecked::<Database>();
+        let from_container_uuid: Uuid = from_container.parse()?;
+        let to_container_uuid: Uuid = to_container.parse()?;
+        let key: Vec<u8> = std::iter::once(Item::TYPE)
+            .chain(from_container_uuid.as_bytes().iter().copied())
+            .chain(item_uuid.as_bytes().iter().copied())
+            .collect();
+
+        if let Some(mut item) = db
+            .get(&key)?
+            .map(|value| bson::from_slice::<Item>(&value))
+            .transpose()?
+        {
+            item.updated = Utc::now();
+            let to_key: Vec<u8> = std::iter::once(Item::TYPE)
+                .chain(to_container_uuid.as_bytes().iter().copied())
+                .chain(item_uuid.as_bytes().iter().copied())
+                .collect();
+            db.put(to_key, bson::to_vec(&item)?)?;
+            db.delete(key)?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+    async fn delete_item(
+        &self,
+        ctx: &Context<'_>,
+        id: String,
+        container: String,
+    ) -> Result<bool, Error> {
+        let item_uuid: Uuid = id.parse()?;
+        let db = ctx.data_unchecked::<Database>();
+        let container_uuid: Uuid = container.parse()?;
+        let key: Vec<u8> = std::iter::once(Item::TYPE)
+            .chain(container_uuid.as_bytes().iter().copied())
+            .chain(item_uuid.as_bytes().iter().copied())
+            .collect();
+        db.delete(key)?;
+        Ok(true)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, SimpleObject)]
@@ -108,6 +258,7 @@ pub struct Container {
     pub created: DateTime<Utc>,
     pub updated: DateTime<Utc>,
     pub name: String,
+    pub location: String,
 }
 
 impl Container {
