@@ -1,0 +1,14 @@
+logging:
+  appenders:
+    stdout:
+      kind: console
+  root:
+    level: debug
+    appenders:
+      - stdout
+
+server:
+  address: 127.0.0.1:3000
+
+database:
+  file: homebox.db
