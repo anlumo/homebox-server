@@ -1,7 +1,6 @@
 use anyhow::Error;
 use async_graphql::{Context, EmptySubscription, Object, Schema, SimpleObject};
 use chrono::{DateTime, Utc};
-use rocksdb::{Direction, IteratorMode};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -32,7 +31,7 @@ impl QueryRoot {
             .chain(uuid.as_bytes().iter().copied())
             .collect();
         ctx.data_unchecked::<Database>()
-            .get(key)?
+            .get_pinned(key)?
             .map(|value| bson::from_slice(&value).map_err(|err| err.into()))
             .transpose()
     }
@@ -59,7 +58,7 @@ impl QueryRoot {
             .chain(container_uuid.as_bytes().iter().copied())
             .chain(item_uuid.as_bytes().iter().copied())
             .collect();
-        db.get(key)?
+        db.get_pinned(key)?
             .map(|item| bson::from_slice(&item).map_err(|err| err.into()))
             .transpose()
     }
@@ -105,7 +104,7 @@ impl MutationRoot {
             .chain(uuid.as_bytes().iter().copied())
             .collect();
         if let Some(mut container) = db
-            .get(&key)?
+            .get_pinned(&key)?
             .map(|value| bson::from_slice::<Container>(&value))
             .transpose()?
         {
@@ -186,7 +185,7 @@ impl MutationRoot {
             .collect();
 
         if let Some(mut item) = db
-            .get(&key)?
+            .get_pinned(&key)?
             .map(|value| bson::from_slice::<Item>(&value))
             .transpose()?
         {
@@ -223,7 +222,7 @@ impl MutationRoot {
             .collect();
 
         if let Some(mut item) = db
-            .get(&key)?
+            .get_pinned(&key)?
             .map(|value| bson::from_slice::<Item>(&value))
             .transpose()?
         {
