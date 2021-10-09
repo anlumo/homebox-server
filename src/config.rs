@@ -12,11 +12,17 @@ pub struct Database {
     pub file: String,
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Auth {
+    pub password: String,
+}
+
 #[derive(Deserialize)]
 pub struct Config {
     pub logging: log4rs::config::RawConfig,
     pub server: Server,
     pub database: Database,
+    pub auth: Auth,
 }
 
 impl Config {

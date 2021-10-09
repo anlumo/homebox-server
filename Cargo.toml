@@ -10,6 +10,7 @@ env_logger = "0.9"
 log4rs = { version = "1.0", features = ["json_encoder"] }
 structopt = "0.3"
 actix-web = "3"
+actix-session = "0.4"
 async-graphql-actix-web = "2.10"
 async-graphql = { version = "2.10.2", features = [ "log", "chrono", "uuid" ] }
 uuid = { version = "0.8", features = [ "v4" ] }

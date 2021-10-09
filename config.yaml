@@ -12,3 +12,6 @@ server:
 
 database:
   file: homebox.db
+
+auth:
+  password: 123abc

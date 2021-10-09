@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use anyhow::Error;
 use async_graphql::{Context, EmptySubscription, Object, Schema, SimpleObject};
 use chrono::{DateTime, Utc};
@@ -10,13 +12,14 @@ pub type HomeboxSchema = Schema<QueryRoot, MutationRoot, EmptySubscription>;
 
 pub const CONTAINER_IMAGE_TYPE: u8 = 2;
 pub const ITEM_IMAGE_TYPE: u8 = 11;
+pub const SESSION_TYPE: u8 = 255;
 
 pub struct QueryRoot;
 
 #[Object]
 impl QueryRoot {
     async fn all_containers(&self, ctx: &Context<'_>) -> Result<Vec<Container>, Error> {
-        ctx.data_unchecked::<Database>()
+        ctx.data_unchecked::<Arc<Database>>()
             .prefix_iterator(&[Container::TYPE])
             .map(|(_, value)| bson::from_slice(&value).map_err(|err| err.into()))
             .collect()
@@ -30,7 +33,7 @@ impl QueryRoot {
         let key: Vec<u8> = std::iter::once(Container::TYPE)
             .chain(uuid.as_bytes().iter().copied())
             .collect();
-        ctx.data_unchecked::<Database>()
+        ctx.data_unchecked::<Arc<Database>>()
             .get_pinned(key)?
             .map(|value| bson::from_slice(&value).map_err(|err| err.into()))
             .transpose()
@@ -40,7 +43,7 @@ impl QueryRoot {
         let key: Vec<u8> = std::iter::once(Item::TYPE)
             .chain(uuid.as_bytes().iter().copied())
             .collect();
-        ctx.data_unchecked::<Database>()
+        ctx.data_unchecked::<Arc<Database>>()
             .prefix_iterator(&key)
             .map(|(_, value)| bson::from_slice(&value).map_err(|err| err.into()))
             .collect()
@@ -52,7 +55,7 @@ impl QueryRoot {
         container: String,
     ) -> Result<Option<Item>, Error> {
         let item_uuid: Uuid = id.parse()?;
-        let db = ctx.data_unchecked::<Database>();
+        let db = ctx.data_unchecked::<Arc<Database>>();
         let container_uuid: Uuid = container.parse()?;
         let key: Vec<u8> = std::iter::once(Item::TYPE)
             .chain(container_uuid.as_bytes().iter().copied())
@@ -79,7 +82,7 @@ impl MutationRoot {
             .chain(uuid.as_bytes().iter().copied())
             .collect();
         let now = Utc::now();
-        ctx.data_unchecked::<Database>().put(
+        ctx.data_unchecked::<Arc<Database>>().put(
             key,
             bson::to_vec(&Container {
                 id: uuid,
@@ -99,7 +102,7 @@ impl MutationRoot {
         #[graphql(desc = "New physical location")] location: Option<String>,
     ) -> Result<bool, Error> {
         let uuid: Uuid = id.parse()?;
-        let db = ctx.data_unchecked::<Database>();
+        let db = ctx.data_unchecked::<Arc<Database>>();
         let key: Vec<u8> = std::iter::once(Container::TYPE)
             .chain(uuid.as_bytes().iter().copied())
             .collect();
@@ -127,7 +130,7 @@ impl MutationRoot {
         #[graphql(desc = "Primary key of a container")] id: String,
     ) -> Result<bool, Error> {
         let uuid: Uuid = id.parse()?;
-        let db = ctx.data_unchecked::<Database>();
+        let db = ctx.data_unchecked::<Arc<Database>>();
         let key: Vec<u8> = std::iter::once(Container::TYPE)
             .chain(uuid.as_bytes().iter().copied())
             .collect();
@@ -154,7 +157,7 @@ impl MutationRoot {
             .chain(uuid.as_bytes().iter().copied())
             .collect();
         let now = Utc::now();
-        ctx.data_unchecked::<Database>().put(
+        ctx.data_unchecked::<Arc<Database>>().put(
             key,
             bson::to_vec(&Item {
                 id: uuid,
@@ -177,7 +180,7 @@ impl MutationRoot {
         description: Option<String>,
     ) -> Result<bool, Error> {
         let item_uuid: Uuid = id.parse()?;
-        let db = ctx.data_unchecked::<Database>();
+        let db = ctx.data_unchecked::<Arc<Database>>();
         let container_uuid: Uuid = container.parse()?;
         let key: Vec<u8> = std::iter::once(Item::TYPE)
             .chain(container_uuid.as_bytes().iter().copied())
@@ -213,7 +216,7 @@ impl MutationRoot {
         to_container: String,
     ) -> Result<bool, Error> {
         let item_uuid: Uuid = id.parse()?;
-        let db = ctx.data_unchecked::<Database>();
+        let db = ctx.data_unchecked::<Arc<Database>>();
         let from_container_uuid: Uuid = from_container.parse()?;
         let to_container_uuid: Uuid = to_container.parse()?;
         let key: Vec<u8> = std::iter::once(Item::TYPE)
@@ -245,7 +248,7 @@ impl MutationRoot {
         container: String,
     ) -> Result<bool, Error> {
         let item_uuid: Uuid = id.parse()?;
-        let db = ctx.data_unchecked::<Database>();
+        let db = ctx.data_unchecked::<Arc<Database>>();
         let container_uuid: Uuid = container.parse()?;
         let key: Vec<u8> = std::iter::once(Item::TYPE)
             .chain(container_uuid.as_bytes().iter().copied())
