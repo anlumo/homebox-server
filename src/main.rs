@@ -75,6 +75,7 @@ async fn main() -> std::io::Result<()> {
             .service(user_session::logout)
             .service(playground)
             .service(gql)
+            .service(gql_sdl)
             .service(images::upload_container_image)
             .service(images::fetch_container_image)
             .service(images::delete_container_image)
@@ -111,4 +112,11 @@ pub async fn gql(
 ) -> Result<Response, actix_web::Error> {
     user_session::verify(&session, &db)?;
     Ok(schema.execute(req.into_inner()).await.into())
+}
+
+#[get("/sdl")]
+pub async fn gql_sdl(schema: web::Data<schema::HomeboxSchema>) -> HttpResponse {
+    HttpResponse::Ok()
+        .header("Content-type", "text/plain")
+        .body(schema.sdl())
 }
