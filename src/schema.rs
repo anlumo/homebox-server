@@ -23,10 +23,7 @@ impl QueryRoot {
         ctx.data_unchecked::<Arc<Database>>()
             .iterator(IteratorMode::From(&[Container::TYPE], Direction::Forward))
             .take_while(|(key, _)| key[0] == Container::TYPE)
-            .map(|(key, value)| {
-                log::debug!("key: {:?}, container: {:?}", key, value);
-                bson::from_slice(&value).map_err(|err| err.into())
-            })
+            .map(|(_, value)| bson::from_slice(&value).map_err(|err| err.into()))
             .collect()
     }
     async fn container(
