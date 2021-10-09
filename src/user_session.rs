@@ -15,6 +15,7 @@ pub struct LoginFormData {
     pub password: String,
 }
 
+// fetch("/login", { method: "POST", body: new URLSearchParams({ password: "..." }) })
 #[post("/login")]
 pub async fn login(
     session: Session,
