@@ -9,14 +9,16 @@ use crate::Database;
 
 pub type HomeboxSchema = Schema<QueryRoot, MutationRoot, EmptySubscription>;
 
+pub const CONTAINER_IMAGE_TYPE: u8 = 2;
+pub const ITEM_IMAGE_TYPE: u8 = 11;
+
 pub struct QueryRoot;
 
 #[Object]
 impl QueryRoot {
     async fn all_containers(&self, ctx: &Context<'_>) -> Result<Vec<Container>, Error> {
         ctx.data_unchecked::<Database>()
-            .iterator(IteratorMode::From(&[Container::TYPE], Direction::Forward))
-            .take_while(|(key, _)| key[0] == Container::TYPE)
+            .prefix_iterator(&[Container::TYPE])
             .map(|(_, value)| bson::from_slice(&value).map_err(|err| err.into()))
             .collect()
     }
@@ -40,8 +42,7 @@ impl QueryRoot {
             .chain(uuid.as_bytes().iter().copied())
             .collect();
         ctx.data_unchecked::<Database>()
-            .iterator(IteratorMode::From(&key, Direction::Forward))
-            .take_while(|(key, _)| key[0] == Item::TYPE && &key[1..17] == uuid.as_bytes())
+            .prefix_iterator(&key)
             .map(|(_, value)| bson::from_slice(&value).map_err(|err| err.into()))
             .collect()
     }
@@ -129,6 +130,10 @@ impl MutationRoot {
         let uuid: Uuid = id.parse()?;
         let db = ctx.data_unchecked::<Database>();
         let key: Vec<u8> = std::iter::once(Container::TYPE)
+            .chain(uuid.as_bytes().iter().copied())
+            .collect();
+        db.delete(key)?;
+        let key: Vec<u8> = std::iter::once(CONTAINER_IMAGE_TYPE)
             .chain(uuid.as_bytes().iter().copied())
             .collect();
         db.delete(key)?;
@@ -244,6 +249,11 @@ impl MutationRoot {
         let db = ctx.data_unchecked::<Database>();
         let container_uuid: Uuid = container.parse()?;
         let key: Vec<u8> = std::iter::once(Item::TYPE)
+            .chain(container_uuid.as_bytes().iter().copied())
+            .chain(item_uuid.as_bytes().iter().copied())
+            .collect();
+        db.delete(key)?;
+        let key: Vec<u8> = std::iter::once(ITEM_IMAGE_TYPE)
             .chain(container_uuid.as_bytes().iter().copied())
             .chain(item_uuid.as_bytes().iter().copied())
             .collect();
