@@ -1,9 +1,15 @@
-use std::{net::SocketAddr, path::PathBuf, sync::Arc};
+use std::{net::SocketAddr, path::PathBuf, str::FromStr, sync::Arc};
 
 use actix_session::{CookieSession, Session};
-use actix_web::{cookie::SameSite, get, post, web, App, Error, HttpResponse, HttpServer};
-use async_graphql::{http::graphiql_source, EmptySubscription, Schema};
+use actix_web::{
+    cookie::SameSite,
+    get, post,
+    web::{self, Data},
+    App, Error, HttpResponse, HttpServer,
+};
+use async_graphql::{futures_util::lock::Mutex, http::graphiql_source, EmptySubscription, Schema};
 use async_graphql_actix_web::{Request, Response};
+use sqlx::{sqlite::SqliteConnectOptions, ConnectOptions, SqliteConnection};
 use structopt::StructOpt;
 
 mod config;
@@ -12,7 +18,8 @@ mod images;
 mod schema;
 mod user_session;
 
-pub type Database = rocksdb::DBWithThreadMode<rocksdb::MultiThreaded>;
+pub type FileDatabase = rocksdb::DBWithThreadMode<rocksdb::MultiThreaded>;
+pub type MetadataDatabase = Arc<Mutex<SqliteConnection>>;
 
 #[derive(StructOpt, Debug)]
 #[structopt(name = "homebox-server", about = "Backend for Homebox")]
@@ -24,8 +31,10 @@ struct Opt {
     /// Path to the config file
     config: PathBuf,
     #[structopt(short, long, parse(try_from_str))]
-    /// Path to the database file
-    database: Option<PathBuf>,
+    /// Path to the file database
+    file_database: Option<PathBuf>,
+    /// sqlite URL to the metadata database
+    metadata_database: Option<String>,
 }
 
 #[actix_web::main]
@@ -44,26 +53,44 @@ async fn main() -> std::io::Result<()> {
         std::process::exit(-1);
     }
 
-    let database_path = opt.database.unwrap_or_else(|| {
+    let file_database_path = opt.file_database.unwrap_or_else(|| {
         config
             .database
             .file
             .parse()
-            .expect("Failed parsing database file name from config file")
+            .expect("Failed parsing file database file name from config file")
     });
-    let db = Arc::new(Database::open_default(database_path).expect("Failed opening database"));
+    let file_db =
+        Arc::new(FileDatabase::open_default(file_database_path).expect("Failed opening database"));
+
+    let metadata_database_path = opt
+        .metadata_database
+        .as_deref()
+        .unwrap_or(&config.database.metadata);
+    let mut metadata_db = SqliteConnectOptions::from_str(metadata_database_path)
+        .unwrap()
+        .create_if_missing(true)
+        .foreign_keys(true)
+        .connect()
+        .await
+        .unwrap();
+    sqlx::migrate!()
+        .run(&mut metadata_db)
+        .await
+        .expect("Failed applying sqlite migrations");
+    let metadata_db = Arc::new(Mutex::new(metadata_db));
 
     let schema = Schema::build(schema::QueryRoot, schema::MutationRoot, EmptySubscription)
-        .data(db.clone())
+        .data(metadata_db.clone())
         .finish();
 
     let config = Arc::new(config);
     let inner_config = config.clone();
     HttpServer::new(move || {
         App::new()
-            .data(schema.clone())
-            .data(db.clone())
-            .data(inner_config.clone())
+            .app_data(Data::new(schema.clone()))
+            .app_data(Data::new(file_db.clone()))
+            .app_data(Data::new(inner_config.clone()))
             .wrap(
                 CookieSession::signed(&[0; 32])
                     .secure(false)
@@ -95,7 +122,7 @@ async fn main() -> std::io::Result<()> {
 #[get("/")]
 pub async fn playground(
     session: Session,
-    db: web::Data<Arc<Database>>,
+    db: web::Data<Arc<FileDatabase>>,
 ) -> Result<HttpResponse, Error> {
     user_session::verify(&session, &db)?;
     Ok(HttpResponse::Ok()
@@ -106,7 +133,7 @@ pub async fn playground(
 #[post("/api/v1")]
 pub async fn gql(
     session: Session,
-    db: web::Data<Arc<Database>>,
+    db: web::Data<Arc<FileDatabase>>,
     schema: web::Data<schema::HomeboxSchema>,
     req: Request,
 ) -> Result<Response, actix_web::Error> {
@@ -117,6 +144,6 @@ pub async fn gql(
 #[get("/sdl")]
 pub async fn gql_sdl(schema: web::Data<schema::HomeboxSchema>) -> HttpResponse {
     HttpResponse::Ok()
-        .header("Content-type", "text/plain")
+        .append_header(("Content-type", "text/plain"))
         .body(schema.sdl())
 }

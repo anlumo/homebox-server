@@ -1,13 +1,15 @@
-use std::sync::Arc;
+use std::{collections::HashMap, ops::DerefMut};
 
 use anyhow::Error;
-use async_graphql::{Context, EmptySubscription, Object, Schema, SimpleObject};
+use async_graphql::{
+    futures_util::{lock::MutexGuard, TryStreamExt},
+    Context, EmptySubscription, Object, Schema, SimpleObject,
+};
 use chrono::{DateTime, Utc};
-use rocksdb::{Direction, IteratorMode};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::Database;
+use crate::MetadataDatabase;
 
 pub type HomeboxSchema = Schema<QueryRoot, MutationRoot, EmptySubscription>;
 
@@ -17,52 +19,168 @@ pub const SESSION_TYPE: u8 = 255;
 
 pub struct QueryRoot;
 
+impl QueryRoot {
+    async fn fetch_container(
+        mut db: MutexGuard<'_, sqlx::SqliteConnection>,
+        id: Uuid,
+    ) -> Result<Option<Container>, Error> {
+        match sqlx::query!("SELECT * FROM containers WHERE uuid = ?", id)
+            .fetch_one(db.deref_mut())
+            .await
+        {
+            Ok(row) => {
+                let location = if let Some(location) = row.location {
+                    sqlx::query!("SELECT * FROM locations WHERE uuid = ?", location)
+                        .fetch_one(db.deref_mut())
+                        .await
+                        .ok()
+                } else {
+                    None
+                };
+                Ok(Some(Container {
+                    id: Uuid::from_slice(&row.uuid).unwrap(),
+                    created: DateTime::from_utc(row.created, Utc),
+                    updated: DateTime::from_utc(row.updated, Utc),
+                    name: row.name,
+                    location: location.map(|location| Location {
+                        id: Uuid::from_slice(&location.uuid).unwrap(),
+                        name: location.name,
+                    }),
+                }))
+            }
+            Err(sqlx::Error::RowNotFound) => Ok(None),
+            Err(err) => Err(err.into()),
+        }
+    }
+}
+
 #[Object]
 impl QueryRoot {
+    async fn all_locations(&self, ctx: &Context<'_>) -> Result<Vec<Location>, Error> {
+        let mut db = ctx.data_unchecked::<MetadataDatabase>().lock().await;
+        let mut locations = sqlx::query!("SELECT * from locations").fetch(db.deref_mut());
+        let mut result = Vec::new();
+        while let Some(row) = locations.try_next().await? {
+            result.push(Location {
+                id: Uuid::from_slice(&row.uuid).unwrap(),
+                name: row.name,
+            });
+        }
+        Ok(result)
+    }
     async fn all_containers(&self, ctx: &Context<'_>) -> Result<Vec<Container>, Error> {
-        ctx.data_unchecked::<Arc<Database>>()
-            .iterator(IteratorMode::From(&[Container::TYPE], Direction::Forward))
-            .take_while(|(key, _)| key[0] == Container::TYPE)
-            .map(|(_, value)| bson::from_slice(&value).map_err(|err| err.into()))
-            .collect()
+        let locations: HashMap<_, _> = self
+            .all_locations(ctx)
+            .await?
+            .into_iter()
+            .map(|location| (location.id, location))
+            .collect();
+        let mut db = ctx.data_unchecked::<MetadataDatabase>().lock().await;
+        let mut containers = sqlx::query!("SELECT * FROM containers").fetch(db.deref_mut());
+        // let mut containers = sqlx::query!("SELECT c.uuid as uuid, c.created as created, c.updated as updated, c.name as name, l.uuid as location_uuid, l.name as location_name FROM containers as c LEFT JOIN locations as l ON (c.location = l.uuid)").fetch(&mut db);
+        let mut result = Vec::new();
+        while let Some(row) = containers.try_next().await? {
+            result.push(Container {
+                id: Uuid::from_slice(&row.uuid).unwrap(),
+                created: DateTime::from_utc(row.created, Utc),
+                updated: DateTime::from_utc(row.updated, Utc),
+                name: row.name,
+                location: row
+                    .location
+                    .and_then(|uuid| Uuid::from_slice(&uuid).ok())
+                    .and_then(|uuid| locations.get(&uuid).cloned()),
+            });
+        }
+        Ok(result)
     }
     async fn container(
         &self,
         ctx: &Context<'_>,
         #[graphql(desc = "Primary key of a container")] id: Uuid,
     ) -> Result<Option<Container>, Error> {
-        let key: Vec<u8> = std::iter::once(Container::TYPE)
-            .chain(id.as_bytes().iter().copied())
-            .collect();
-        ctx.data_unchecked::<Arc<Database>>()
-            .get_pinned(key)?
-            .map(|value| bson::from_slice(&value).map_err(|err| err.into()))
-            .transpose()
+        Self::fetch_container(ctx.data_unchecked::<MetadataDatabase>().lock().await, id).await
     }
-    async fn items_in_container(&self, ctx: &Context<'_>, id: Uuid) -> Result<Vec<Item>, Error> {
-        let key: Vec<u8> = std::iter::once(Item::TYPE)
-            .chain(id.as_bytes().iter().copied())
+    async fn items_in_container(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Primary key of a container")] id: Uuid,
+    ) -> Result<Vec<Item>, Error> {
+        if let Some(container) = self.container(ctx, id).await? {
+            let mut db = ctx.data_unchecked::<MetadataDatabase>().lock().await;
+            let mut items =
+                sqlx::query!("SELECT * FROM items WHERE container = ?", id).fetch(db.deref_mut());
+            let mut result = Vec::new();
+            while let Some(row) = items.try_next().await? {
+                result.push(Item {
+                    id: Uuid::from_slice(&row.uuid).unwrap(),
+                    created: DateTime::from_utc(row.created, Utc),
+                    updated: DateTime::from_utc(row.updated, Utc),
+                    name: row.name,
+                    quantity: row.quantity as _,
+                    description: row.description,
+                    container: container.clone(),
+                });
+            }
+            Ok(result)
+        } else {
+            Err(sqlx::Error::RowNotFound.into())
+        }
+    }
+    async fn all_items(&self, ctx: &Context<'_>) -> Result<Vec<Item>, Error> {
+        let containers: HashMap<_, _> = self
+            .all_containers(ctx)
+            .await?
+            .into_iter()
+            .map(|container| (container.id, container))
             .collect();
-        ctx.data_unchecked::<Arc<Database>>()
-            .iterator(IteratorMode::From(&key, Direction::Forward))
-            .take_while(|(key_iter, _)| key == key_iter[..key.len()])
-            .map(|(_, value)| bson::from_slice(&value).map_err(|err| err.into()))
-            .collect()
+        let mut db = ctx.data_unchecked::<MetadataDatabase>().lock().await;
+        let mut items = sqlx::query!("SELECT * FROM items").fetch(db.deref_mut());
+        let mut result = Vec::new();
+        while let Some(row) = items.try_next().await? {
+            if let Some(container) = containers.get(&Uuid::from_slice(&row.container).unwrap()) {
+                result.push(Item {
+                    id: Uuid::from_slice(&row.uuid).unwrap(),
+                    created: DateTime::from_utc(row.created, Utc),
+                    updated: DateTime::from_utc(row.updated, Utc),
+                    name: row.name,
+                    quantity: row.quantity as _,
+                    description: row.description,
+                    container: container.clone(),
+                });
+            }
+        }
+        Ok(result)
     }
     async fn item(
         &self,
         ctx: &Context<'_>,
-        id: Uuid,
-        container: Uuid,
+        #[graphql(desc = "Primary key of an item")] id: Uuid,
     ) -> Result<Option<Item>, Error> {
-        let db = ctx.data_unchecked::<Arc<Database>>();
-        let key: Vec<u8> = std::iter::once(Item::TYPE)
-            .chain(container.as_bytes().iter().copied())
-            .chain(id.as_bytes().iter().copied())
-            .collect();
-        db.get_pinned(key)?
-            .map(|item| bson::from_slice(&item).map_err(|err| err.into()))
-            .transpose()
+        let mut db = ctx.data_unchecked::<MetadataDatabase>().lock().await;
+        match sqlx::query!("SELECT * FROM items WHERE uuid = ?", id)
+            .fetch_one(db.deref_mut())
+            .await
+        {
+            Ok(row) => {
+                if let Some(container) =
+                    Self::fetch_container(db, Uuid::from_slice(&row.container).unwrap()).await?
+                {
+                    Ok(Some(Item {
+                        id: Uuid::from_slice(&row.uuid).unwrap(),
+                        created: DateTime::from_utc(row.created, Utc),
+                        updated: DateTime::from_utc(row.updated, Utc),
+                        name: row.name,
+                        quantity: row.quantity as _,
+                        description: row.description,
+                        container,
+                    }))
+                } else {
+                    Err(sqlx::Error::RowNotFound.into())
+                }
+            }
+            Err(sqlx::Error::RowNotFound) => Ok(None),
+            Err(err) => Err(err.into()),
+        }
     }
 }
 
@@ -70,73 +188,99 @@ pub struct MutationRoot;
 
 #[Object]
 impl MutationRoot {
+    async fn add_location(&self, ctx: &Context<'_>, name: String) -> Result<Uuid, Error> {
+        let uuid = Uuid::new_v4();
+        let mut db = ctx.data_unchecked::<MetadataDatabase>().lock().await;
+        sqlx::query!(
+            "INSERT INTO locations (uuid, name) VALUES (?, ?)",
+            uuid,
+            name
+        )
+        .execute(db.deref_mut())
+        .await?;
+        Ok(uuid)
+    }
+    async fn update_location(
+        &self,
+        ctx: &Context<'_>,
+        id: Uuid,
+        name: String,
+    ) -> Result<bool, Error> {
+        let mut db = ctx.data_unchecked::<MetadataDatabase>().lock().await;
+        let result = sqlx::query!("UPDATE locations SET name = ? WHERE uuid = ?", name, id)
+            .execute(db.deref_mut())
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+    async fn delete_location(&self, ctx: &Context<'_>, id: Uuid) -> Result<bool, Error> {
+        let mut db = ctx.data_unchecked::<MetadataDatabase>().lock().await;
+        let result = sqlx::query!("DELETE FROM locations WHERE uuid = ?", id)
+            .execute(db.deref_mut())
+            .await?;
+        if result.rows_affected() > 0 {
+            let now = Utc::now();
+            sqlx::query!(
+                "UPDATE containers SET updated = ?, location = NULL WHERE location = ?",
+                now,
+                id
+            )
+            .execute(db.deref_mut())
+            .await?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
     async fn add_container(
         &self,
         ctx: &Context<'_>,
         #[graphql(desc = "Name of the new container")] name: String,
-        #[graphql(desc = "Physical location of container")] location: String,
+        #[graphql(desc = "Physical location of container")] location: Uuid,
     ) -> Result<Uuid, Error> {
         let uuid = Uuid::new_v4();
-        let key: Vec<u8> = std::iter::once(Container::TYPE)
-            .chain(uuid.as_bytes().iter().copied())
-            .collect();
         let now = Utc::now();
-        ctx.data_unchecked::<Arc<Database>>().put(
-            key,
-            bson::to_vec(&Container {
-                id: uuid,
-                created: now,
-                updated: now,
-                name,
-                location,
-            })?,
-        )?;
+        let mut db = ctx.data_unchecked::<MetadataDatabase>().lock().await;
+        sqlx::query!("INSERT INTO containers (uuid, created, updated, name, location) VALUES (?, ?, ?, ?, ?)", uuid, now, now, name, location).execute(db.deref_mut()).await?;
         Ok(uuid)
     }
     async fn update_container(
         &self,
         ctx: &Context<'_>,
         #[graphql(desc = "Primary key of a container")] id: Uuid,
-        #[graphql(desc = "New name")] name: Option<String>,
-        #[graphql(desc = "New physical location")] location: Option<String>,
+        #[graphql(desc = "New name")] name: String,
+        #[graphql(desc = "New physical location")] location: Uuid,
     ) -> Result<bool, Error> {
-        let db = ctx.data_unchecked::<Arc<Database>>();
-        let key: Vec<u8> = std::iter::once(Container::TYPE)
-            .chain(id.as_bytes().iter().copied())
-            .collect();
-        if let Some(mut container) = db
-            .get_pinned(&key)?
-            .map(|value| bson::from_slice::<Container>(&value))
-            .transpose()?
-        {
-            if let Some(name) = name {
-                container.name = name;
-            }
-            if let Some(location) = location {
-                container.location = location;
-            }
-            container.updated = Utc::now();
-            db.put(key, bson::to_vec(&container)?)?;
-            Ok(true)
-        } else {
-            Ok(false)
-        }
+        let mut db = ctx.data_unchecked::<MetadataDatabase>().lock().await;
+        let now = Utc::now();
+        let result = sqlx::query!(
+            "UPDATE containers SET name = ?, location = ?, updated = ? WHERE uuid = ?",
+            name,
+            location,
+            now,
+            id
+        )
+        .execute(db.deref_mut())
+        .await?;
+        Ok(result.rows_affected() > 0)
     }
     async fn delete_container(
         &self,
         ctx: &Context<'_>,
         #[graphql(desc = "Primary key of a container")] id: Uuid,
     ) -> Result<bool, Error> {
-        let db = ctx.data_unchecked::<Arc<Database>>();
-        let key: Vec<u8> = std::iter::once(Container::TYPE)
-            .chain(id.as_bytes().iter().copied())
-            .collect();
-        db.delete(key)?;
-        let key: Vec<u8> = std::iter::once(CONTAINER_IMAGE_TYPE)
-            .chain(id.as_bytes().iter().copied())
-            .collect();
-        db.delete(key)?;
-        Ok(true)
+        let mut db = ctx.data_unchecked::<MetadataDatabase>().lock().await;
+        let result = sqlx::query!("DELETE FROM containers WHERE uuid = ?", id)
+            .execute(db.deref_mut())
+            .await?;
+        if result.rows_affected() > 0 {
+            sqlx::query!("DELETE FROM items WHERE container = ?", id)
+                .execute(db.deref_mut())
+                .await?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 
     async fn add_item(
@@ -145,112 +289,64 @@ impl MutationRoot {
         container: Uuid,
         name: String,
         quantity: usize,
-        description: String,
+        description: Option<String>,
     ) -> Result<Uuid, Error> {
         let uuid = Uuid::new_v4();
-        let key: Vec<u8> = std::iter::once(Item::TYPE)
-            .chain(container.as_bytes().iter().copied())
-            .chain(uuid.as_bytes().iter().copied())
-            .collect();
         let now = Utc::now();
-        ctx.data_unchecked::<Arc<Database>>().put(
-            key,
-            bson::to_vec(&Item {
-                id: uuid,
-                created: now,
-                updated: now,
-                name,
-                quantity,
-                description,
-            })?,
-        )?;
+        let mut db = ctx.data_unchecked::<MetadataDatabase>().lock().await;
+        let quantity = quantity as i64;
+        sqlx::query!("INSERT INTO items (uuid, created, updated, name, description, quantity, container) VALUES (?, ?, ?, ?, ?, ?, ?)", uuid, now, now, name, description, quantity, container).execute(db.deref_mut()).await?;
         Ok(uuid)
     }
     async fn update_item(
         &self,
         ctx: &Context<'_>,
         id: Uuid,
-        container: Uuid,
-        name: Option<String>,
-        quantity: Option<usize>,
+        name: String,
         description: Option<String>,
+        quantity: Option<usize>,
     ) -> Result<bool, Error> {
-        let db = ctx.data_unchecked::<Arc<Database>>();
-        let key: Vec<u8> = std::iter::once(Item::TYPE)
-            .chain(container.as_bytes().iter().copied())
-            .chain(id.as_bytes().iter().copied())
-            .collect();
+        let mut db = ctx.data_unchecked::<MetadataDatabase>().lock().await;
+        let quantity = quantity.map(|q| q as i64);
+        let now = Utc::now();
+        let result = sqlx::query!(
+            "UPDATE items SET updated = ?, name = ?, description = ?, quantity = ? WHERE uuid = ?",
+            now,
+            name,
+            description,
+            quantity,
+            id
+        )
+        .execute(db.deref_mut())
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+    async fn move_item(&self, ctx: &Context<'_>, id: Uuid, container: Uuid) -> Result<bool, Error> {
+        let mut db = ctx.data_unchecked::<MetadataDatabase>().lock().await;
+        let now = Utc::now();
+        let result = sqlx::query!(
+            "UPDATE items SET updated = ?, container = ? WHERE uuid = ?",
+            now,
+            container,
+            id
+        )
+        .execute(db.deref_mut())
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+    async fn delete_item(&self, ctx: &Context<'_>, id: Uuid) -> Result<bool, Error> {
+        let mut db = ctx.data_unchecked::<MetadataDatabase>().lock().await;
+        let result = sqlx::query!("DELETE FROM items WHERE uuid = ?", id)
+            .execute(db.deref_mut())
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+}
 
-        if let Some(mut item) = db
-            .get_pinned(&key)?
-            .map(|value| bson::from_slice::<Item>(&value))
-            .transpose()?
-        {
-            if let Some(name) = name {
-                item.name = name;
-            }
-            if let Some(quantity) = quantity {
-                item.quantity = quantity;
-            }
-            if let Some(description) = description {
-                item.description = description;
-            }
-            item.updated = Utc::now();
-            db.put(key, bson::to_vec(&item)?)?;
-            Ok(true)
-        } else {
-            Ok(false)
-        }
-    }
-    async fn move_item(
-        &self,
-        ctx: &Context<'_>,
-        id: Uuid,
-        from_container: Uuid,
-        to_container: Uuid,
-    ) -> Result<bool, Error> {
-        let db = ctx.data_unchecked::<Arc<Database>>();
-        let key: Vec<u8> = std::iter::once(Item::TYPE)
-            .chain(from_container.as_bytes().iter().copied())
-            .chain(id.as_bytes().iter().copied())
-            .collect();
-
-        if let Some(mut item) = db
-            .get_pinned(&key)?
-            .map(|value| bson::from_slice::<Item>(&value))
-            .transpose()?
-        {
-            item.updated = Utc::now();
-            let to_key: Vec<u8> = std::iter::once(Item::TYPE)
-                .chain(to_container.as_bytes().iter().copied())
-                .chain(id.as_bytes().iter().copied())
-                .collect();
-            db.put(to_key, bson::to_vec(&item)?)?;
-            db.delete(key)?;
-            Ok(true)
-        } else {
-            Ok(false)
-        }
-    }
-    async fn delete_item(
-        &self,
-        ctx: &Context<'_>,
-        id: Uuid,
-        container: Uuid,
-    ) -> Result<bool, Error> {
-        let db = ctx.data_unchecked::<Arc<Database>>();
-        let key: Vec<u8> = std::iter::once(Item::TYPE)
-            .chain(container.as_bytes().iter().copied())
-            .chain(id.as_bytes().iter().copied())
-            .collect();
-        db.delete(key)?;
-        let key: Vec<u8> = std::iter::once(ITEM_IMAGE_TYPE)
-            .chain(container.as_bytes().iter().copied())
-            .chain(id.as_bytes().iter().copied())
-            .collect();
-        db.delete(key)?;
-        Ok(true)
-    }
+#[derive(Debug, Clone, Serialize, Deserialize, SimpleObject)]
+pub struct Location {
+    pub id: Uuid,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, SimpleObject)]
@@ -258,12 +354,8 @@ pub struct Container {
     pub id: Uuid,
     pub created: DateTime<Utc>,
     pub updated: DateTime<Utc>,
-    pub name: String,
-    pub location: String,
-}
-
-impl Container {
-    pub const TYPE: u8 = 0;
+    pub name: Option<String>,
+    pub location: Option<Location>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, SimpleObject)]
@@ -273,9 +365,6 @@ pub struct Item {
     pub updated: DateTime<Utc>,
     pub name: String,
     pub quantity: usize,
-    pub description: String,
-}
-
-impl Item {
-    pub const TYPE: u8 = 10;
+    pub description: Option<String>,
+    pub container: Container,
 }

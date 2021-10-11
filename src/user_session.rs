@@ -8,7 +8,7 @@ use actix_web::{
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::{config::Config, schema::SESSION_TYPE, Database};
+use crate::{config::Config, schema::SESSION_TYPE, FileDatabase};
 
 #[derive(Deserialize)]
 pub struct LoginFormData {
@@ -19,7 +19,7 @@ pub struct LoginFormData {
 #[post("/login")]
 pub async fn login(
     session: Session,
-    db: web::Data<Arc<Database>>,
+    db: web::Data<Arc<FileDatabase>>,
     config: web::Data<Arc<Config>>,
     form: web::Form<LoginFormData>,
 ) -> Result<HttpResponse, actix_web::Error> {
@@ -31,7 +31,7 @@ pub async fn login(
             .collect();
 
         db.put(key, &[]).map_err(ErrorInternalServerError)?;
-        session.set("auth", token)?;
+        session.insert("auth", token)?;
         Ok(HttpResponse::Ok().body("OK"))
     } else {
         Ok(HttpResponse::Unauthorized().body("Invalid password"))
@@ -41,7 +41,7 @@ pub async fn login(
 #[post("/logout")]
 pub async fn logout(
     session: Session,
-    db: web::Data<Arc<Database>>,
+    db: web::Data<Arc<FileDatabase>>,
 ) -> Result<HttpResponse, actix_web::Error> {
     if let Some(token) = session.get::<Uuid>("auth").ok().flatten() {
         let key: Vec<u8> = std::iter::once(SESSION_TYPE)
@@ -53,7 +53,7 @@ pub async fn logout(
     Ok(HttpResponse::Ok().body("OK"))
 }
 
-pub fn verify(session: &Session, db: &Database) -> Result<(), Error> {
+pub fn verify(session: &Session, db: &FileDatabase) -> Result<(), Error> {
     let verified = if let Some(token) = session.get::<Uuid>("auth").ok().flatten() {
         let key: Vec<u8> = std::iter::once(SESSION_TYPE)
             .chain(token.as_bytes().iter().copied())

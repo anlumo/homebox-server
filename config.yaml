@@ -11,7 +11,8 @@ server:
   address: 127.0.0.1:3000
 
 database:
-  file: homebox.db
+  file: homebox-files.db
+  metadata: sqlite:homebox.db
 
 auth:
   password: 123abc

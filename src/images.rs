@@ -13,13 +13,13 @@ use uuid::Uuid;
 
 use crate::{
     schema::{CONTAINER_IMAGE_TYPE, ITEM_IMAGE_TYPE},
-    user_session, Database,
+    user_session, FileDatabase,
 };
 
 #[post("/image/container/{id}")]
 pub async fn upload_container_image(
     session: Session,
-    db: web::Data<Arc<Database>>,
+    db: web::Data<Arc<FileDatabase>>,
     id: web::Path<(String,)>,
     req: HttpRequest,
     mut data: web::Payload,
@@ -45,7 +45,7 @@ pub async fn upload_container_image(
 #[get("/image/container/{id}")]
 pub async fn fetch_container_image(
     session: Session,
-    db: web::Data<Arc<Database>>,
+    db: web::Data<Arc<FileDatabase>>,
     id: web::Path<(String,)>,
 ) -> Result<HttpResponse, actix_web::Error> {
     user_session::verify(&session, &db)?;
@@ -64,7 +64,7 @@ pub async fn fetch_container_image(
 #[delete("/image/container/{id}")]
 pub async fn delete_container_image(
     session: Session,
-    db: web::Data<Arc<Database>>,
+    db: web::Data<Arc<FileDatabase>>,
     id: web::Path<(String,)>,
 ) -> Result<HttpResponse, actix_web::Error> {
     user_session::verify(&session, &db)?;
@@ -79,7 +79,7 @@ pub async fn delete_container_image(
 #[post("/image/container/{container_id}/item/{item_id}")]
 pub async fn upload_item_image(
     session: Session,
-    db: web::Data<Arc<Database>>,
+    db: web::Data<Arc<FileDatabase>>,
     id: web::Path<(String, String)>,
     req: HttpRequest,
     mut data: web::Payload,
@@ -108,7 +108,7 @@ pub async fn upload_item_image(
 #[get("/image/container/{container_id}/item/{item_id}")]
 pub async fn fetch_item_image(
     session: Session,
-    db: web::Data<Arc<Database>>,
+    db: web::Data<Arc<FileDatabase>>,
     id: web::Path<(String, String)>,
 ) -> Result<HttpResponse, actix_web::Error> {
     user_session::verify(&session, &db)?;
@@ -130,7 +130,7 @@ pub async fn fetch_item_image(
 #[delete("/image/container/{container_id}/item/{item_id}")]
 pub async fn delete_item_image(
     session: Session,
-    db: web::Data<Arc<Database>>,
+    db: web::Data<Arc<FileDatabase>>,
     id: web::Path<(String, String)>,
 ) -> Result<HttpResponse, actix_web::Error> {
     user_session::verify(&session, &db)?;

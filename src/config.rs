@@ -10,6 +10,7 @@ pub struct Server {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Database {
     pub file: String,
+    pub metadata: String,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
