@@ -96,7 +96,8 @@ async fn main() -> std::io::Result<()> {
                     .secure(false)
                     .path("/")
                     .http_only(true)
-                    .same_site(SameSite::Strict),
+                    .same_site(SameSite::Strict)
+                    .expires_in(60 * 60 * 24 * 365),
             )
             .service(user_session::login)
             .service(user_session::logout)
