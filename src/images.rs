@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{io::BufWriter, sync::Arc};
 
 use actix_session::Session;
 use actix_web::{
@@ -9,6 +9,7 @@ use actix_web::{
     post, web, HttpRequest, HttpResponse,
 };
 use async_graphql::futures_util::StreamExt;
+use datamatrix::{DataMatrix, SymbolList};
 use uuid::Uuid;
 
 use crate::{
@@ -143,4 +144,80 @@ pub async fn delete_item_image(
         .collect();
     db.delete(key).map_err(ErrorInternalServerError)?;
     Ok(HttpResponse::Ok().body("OK"))
+}
+
+#[get("/barcode/container/{container_id}")]
+pub async fn barcode_container(id: web::Path<Uuid>) -> Result<HttpResponse, actix_web::Error> {
+    let mut data = "HOMEBOX:C:".as_bytes().to_vec();
+    data.extend(id.into_inner().as_bytes());
+    let bitmap = DataMatrix::encode(&data, SymbolList::default())
+        .map_err(|_| ErrorInternalServerError("Error generating barcode"))?
+        .bitmap();
+
+    let width = bitmap.width();
+    let width_pad = if width % 8 == 0 {
+        width
+    } else {
+        width + (8 - width % 8)
+    };
+    let height = bitmap.height();
+    let mut raw = vec![255u8; width_pad * height / 8];
+    for (x, y) in bitmap.pixels() {
+        let offset = x + y * width_pad;
+        raw[offset / 8] &= !(1 << (7 - offset % 8));
+    }
+
+    let mut image = Vec::new();
+    {
+        let buffer = BufWriter::new(&mut image);
+        let mut encoder = png::Encoder::new(buffer, width as _, height as _);
+        encoder.set_color(png::ColorType::Grayscale);
+        encoder.set_depth(png::BitDepth::One);
+        let mut writer = encoder
+            .write_header()
+            .map_err(|_| ErrorInternalServerError("Error generating barcode image"))?;
+        writer
+            .write_image_data(&raw)
+            .map_err(|_| ErrorInternalServerError("Error generating barcode image"))?;
+    }
+
+    Ok(HttpResponse::Ok().content_type("image/png").body(image))
+}
+
+#[get("/barcode/item/{item_id}")]
+pub async fn barcode_item(id: web::Path<Uuid>) -> Result<HttpResponse, actix_web::Error> {
+    let mut data = "HOMEBOX:I:".as_bytes().to_vec();
+    data.extend(id.into_inner().as_bytes());
+    let bitmap = DataMatrix::encode(&data, SymbolList::default())
+        .map_err(|_| ErrorInternalServerError("Error generating barcode"))?
+        .bitmap();
+
+    let width = bitmap.width();
+    let width_pad = if width % 8 == 0 {
+        width
+    } else {
+        width + (8 - width % 8)
+    };
+    let height = bitmap.height();
+    let mut raw = vec![255u8; width_pad * height / 8];
+    for (x, y) in bitmap.pixels() {
+        let offset = x + y * width_pad;
+        raw[offset / 8] &= !(1 << (7 - offset % 8));
+    }
+
+    let mut image = Vec::new();
+    {
+        let buffer = BufWriter::new(&mut image);
+        let mut encoder = png::Encoder::new(buffer, width as _, height as _);
+        encoder.set_color(png::ColorType::Grayscale);
+        encoder.set_depth(png::BitDepth::One);
+        let mut writer = encoder
+            .write_header()
+            .map_err(|_| ErrorInternalServerError("Error generating barcode image"))?;
+        writer
+            .write_image_data(&raw)
+            .map_err(|_| ErrorInternalServerError("Error generating barcode image"))?;
+    }
+
+    Ok(HttpResponse::Ok().content_type("image/png").body(image))
 }

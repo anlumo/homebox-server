@@ -19,3 +19,8 @@ serde = { version = "1.0", features = [ "serde_derive" ] }
 serde_yaml = "0.8"
 rocksdb = "0.17"
 sqlx = { version = "0.5", features = [ "runtime-actix-rustls", "sqlite", "macros", "migrate", "chrono", "uuid" ] }
+datamatrix = "0.2.1"
+png = "0.17.2"
+
+[build-dependencies]
+funty = "~1.1" # workaround for issue where bitvec and funty have a conflict with certain versions

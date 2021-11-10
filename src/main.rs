@@ -110,6 +110,8 @@ async fn main() -> std::io::Result<()> {
             .service(images::upload_item_image)
             .service(images::fetch_item_image)
             .service(images::delete_item_image)
+            .service(images::barcode_container)
+            .service(images::barcode_item)
     })
     .bind(
         opt.address
