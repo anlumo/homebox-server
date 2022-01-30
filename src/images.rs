@@ -154,16 +154,17 @@ pub async fn barcode_container(id: web::Path<Uuid>) -> Result<HttpResponse, acti
         .map_err(|_| ErrorInternalServerError("Error generating barcode"))?
         .bitmap();
 
-    let width = bitmap.width();
+    // include quiet zone
+    let width = bitmap.width() + 2;
     let width_pad = if width % 8 == 0 {
         width
     } else {
         width + (8 - width % 8)
     };
-    let height = bitmap.height();
+    let height = bitmap.height() + 2;
     let mut raw = vec![255u8; width_pad * height / 8];
     for (x, y) in bitmap.pixels() {
-        let offset = x + y * width_pad;
+        let offset = (x + 1) + (y + 1) * width_pad;
         raw[offset / 8] &= !(1 << (7 - offset % 8));
     }
 
