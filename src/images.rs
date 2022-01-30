@@ -5,7 +5,7 @@ use actix_web::{
     delete,
     error::{ErrorBadRequest, ErrorInternalServerError},
     get,
-    http::HeaderValue,
+    http::header::HeaderValue,
     post, web, HttpRequest, HttpResponse,
 };
 use async_graphql::futures_util::StreamExt;

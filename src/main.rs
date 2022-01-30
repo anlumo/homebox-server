@@ -8,7 +8,7 @@ use actix_web::{
     App, Error, HttpResponse, HttpServer,
 };
 use async_graphql::{futures_util::lock::Mutex, http::graphiql_source, EmptySubscription, Schema};
-use async_graphql_actix_web::{Request, Response};
+use async_graphql_actix_web::{GraphQLRequest, GraphQLResponse};
 use sqlx::{sqlite::SqliteConnectOptions, ConnectOptions, SqliteConnection};
 use structopt::StructOpt;
 
@@ -138,8 +138,8 @@ pub async fn gql(
     session: Session,
     db: web::Data<Arc<FileDatabase>>,
     schema: web::Data<schema::HomeboxSchema>,
-    req: Request,
-) -> Result<Response, actix_web::Error> {
+    req: GraphQLRequest,
+) -> Result<GraphQLResponse, actix_web::Error> {
     user_session::verify(&session, &db)?;
     Ok(schema.execute(req.into_inner()).await.into())
 }

@@ -8,7 +8,7 @@ logging:
       - stdout
 
 server:
-  address: 127.0.0.1:3000
+  address: 0.0.0.0:3000
 
 database:
   file: homebox-files.db
