@@ -1,10 +1,7 @@
 use std::sync::Arc;
 
 use actix_session::Session;
-use actix_web::{
-    error::{ErrorInternalServerError, ErrorUnauthorized},
-    post, web, Error, HttpResponse,
-};
+use actix_web::{error::ErrorInternalServerError, post, web, HttpResponse};
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -53,7 +50,7 @@ pub async fn logout(
     Ok(HttpResponse::Ok().body("OK"))
 }
 
-pub fn verify(session: &Session, db: &FileDatabase) -> Result<(), Error> {
+pub fn verify(session: &Session, db: &FileDatabase) -> Result<(), HttpResponse> {
     let verified = if let Some(token) = session.get::<Uuid>("auth").ok().flatten() {
         let key: Vec<u8> = std::iter::once(SESSION_TYPE)
             .chain(token.as_bytes().iter().copied())
@@ -65,6 +62,8 @@ pub fn verify(session: &Session, db: &FileDatabase) -> Result<(), Error> {
     if verified {
         Ok(())
     } else {
-        Err(ErrorUnauthorized("Please log in first"))
+        Err(HttpResponse::Unauthorized()
+            .content_type("text/html")
+            .body(include_str!("../login.html")))
     }
 }

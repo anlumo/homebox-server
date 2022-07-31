@@ -25,7 +25,9 @@ pub async fn upload_container_image(
     req: HttpRequest,
     mut data: web::Payload,
 ) -> Result<HttpResponse, actix_web::Error> {
-    user_session::verify(&session, &db)?;
+    if let Err(response) = user_session::verify(&session, &db) {
+        return Ok(response);
+    }
     let uuid = id.into_inner().0.parse::<Uuid>().map_err(ErrorBadRequest)?;
     let key: Vec<u8> = std::iter::once(CONTAINER_IMAGE_TYPE)
         .chain(uuid.as_bytes().iter().copied())
@@ -49,7 +51,9 @@ pub async fn fetch_container_image(
     db: web::Data<Arc<FileDatabase>>,
     id: web::Path<(String,)>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    user_session::verify(&session, &db)?;
+    if let Err(response) = user_session::verify(&session, &db) {
+        return Ok(response);
+    }
     let uuid = id.into_inner().0.parse::<Uuid>().map_err(ErrorBadRequest)?;
     let key: Vec<u8> = std::iter::once(CONTAINER_IMAGE_TYPE)
         .chain(uuid.as_bytes().iter().copied())
@@ -68,7 +72,9 @@ pub async fn delete_container_image(
     db: web::Data<Arc<FileDatabase>>,
     id: web::Path<(String,)>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    user_session::verify(&session, &db)?;
+    if let Err(response) = user_session::verify(&session, &db) {
+        return Ok(response);
+    }
     let uuid = id.into_inner().0.parse::<Uuid>().map_err(ErrorBadRequest)?;
     let key: Vec<u8> = std::iter::once(CONTAINER_IMAGE_TYPE)
         .chain(uuid.as_bytes().iter().copied())
@@ -85,7 +91,9 @@ pub async fn upload_item_image(
     req: HttpRequest,
     mut data: web::Payload,
 ) -> Result<HttpResponse, actix_web::Error> {
-    user_session::verify(&session, &db)?;
+    if let Err(response) = user_session::verify(&session, &db) {
+        return Ok(response);
+    }
     let (container_id, item_id) = id.into_inner();
     let container_uuid = container_id.parse::<Uuid>().map_err(ErrorBadRequest)?;
     let item_uuid = item_id.parse::<Uuid>().map_err(ErrorBadRequest)?;
@@ -112,7 +120,9 @@ pub async fn fetch_item_image(
     db: web::Data<Arc<FileDatabase>>,
     id: web::Path<(String, String)>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    user_session::verify(&session, &db)?;
+    if let Err(response) = user_session::verify(&session, &db) {
+        return Ok(response);
+    }
     let (container_id, item_id) = id.into_inner();
     let container_uuid = container_id.parse::<Uuid>().map_err(ErrorBadRequest)?;
     let item_uuid = item_id.parse::<Uuid>().map_err(ErrorBadRequest)?;
@@ -134,7 +144,9 @@ pub async fn delete_item_image(
     db: web::Data<Arc<FileDatabase>>,
     id: web::Path<(String, String)>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    user_session::verify(&session, &db)?;
+    if let Err(response) = user_session::verify(&session, &db) {
+        return Ok(response);
+    }
     let (container_id, item_id) = id.into_inner();
     let container_uuid = container_id.parse::<Uuid>().map_err(ErrorBadRequest)?;
     let item_uuid = item_id.parse::<Uuid>().map_err(ErrorBadRequest)?;

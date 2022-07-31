@@ -5,7 +5,7 @@ use actix_web::{
     cookie::SameSite,
     get, post,
     web::{self, Data},
-    App, Error, HttpResponse, HttpServer,
+    App, HttpResponse, HttpServer, Responder,
 };
 use async_graphql::{futures_util::lock::Mutex, http::graphiql_source, EmptySubscription, Schema};
 use async_graphql_actix_web::{GraphQLRequest, GraphQLResponse};
@@ -123,14 +123,14 @@ async fn main() -> std::io::Result<()> {
 }
 
 #[get("/")]
-pub async fn playground(
-    session: Session,
-    db: web::Data<Arc<FileDatabase>>,
-) -> Result<HttpResponse, Error> {
-    user_session::verify(&session, &db)?;
-    Ok(HttpResponse::Ok()
-        .content_type("text/html; charset=utf-8")
-        .body(graphiql_source("/api/v1", None)))
+pub async fn playground(session: Session, db: web::Data<Arc<FileDatabase>>) -> HttpResponse {
+    user_session::verify(&session, &db)
+        .err()
+        .unwrap_or_else(|| {
+            HttpResponse::Ok()
+                .content_type("text/html; charset=utf-8")
+                .body(graphiql_source("/api/v1", None))
+        })
 }
 
 #[post("/api/v1")]
@@ -139,9 +139,13 @@ pub async fn gql(
     db: web::Data<Arc<FileDatabase>>,
     schema: web::Data<schema::HomeboxSchema>,
     req: GraphQLRequest,
-) -> Result<GraphQLResponse, actix_web::Error> {
-    user_session::verify(&session, &db)?;
-    Ok(schema.execute(req.into_inner()).await.into())
+    actix_req: actix_web::HttpRequest,
+) -> HttpResponse {
+    if let Err(response) = user_session::verify(&session, &db) {
+        response
+    } else {
+        GraphQLResponse::from(schema.execute(req.into_inner()).await).respond_to(&actix_req)
+    }
 }
 
 #[get("/sdl")]
