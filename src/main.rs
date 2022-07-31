@@ -1,8 +1,17 @@
-use std::{net::SocketAddr, path::PathBuf, str::FromStr, sync::Arc};
+use std::{
+    fs::File,
+    io::{Read, Write},
+    net::SocketAddr,
+    path::{Path, PathBuf},
+    str::FromStr,
+    sync::Arc,
+};
 
-use actix_session::{CookieSession, Session};
+use actix_session::{
+    config::BrowserSession, storage::CookieSessionStore, Session, SessionMiddleware,
+};
 use actix_web::{
-    cookie::SameSite,
+    cookie::{time::Duration, Key, SameSite},
     get, post,
     web::{self, Data},
     App, HttpResponse, HttpServer, Responder,
@@ -35,6 +44,22 @@ struct Opt {
     file_database: Option<PathBuf>,
     /// sqlite URL to the metadata database
     metadata_database: Option<String>,
+}
+
+fn get_secret_key(store: impl AsRef<Path>) -> std::io::Result<Key> {
+    if let Ok(mut file) = File::open(&store) {
+        let mut buffer = Vec::new();
+        let len = file.read_to_end(&mut buffer)?;
+        if len == 64 {
+            return Ok(Key::from(&buffer));
+        }
+    }
+    log::warn!("Unable to read cookie master key, generating a new one.");
+    let key = Key::generate();
+    let mut file = File::create(store)?;
+    file.write_all(key.master())?;
+    file.sync_all()?;
+    Ok(key)
 }
 
 #[actix_web::main]
@@ -86,18 +111,20 @@ async fn main() -> std::io::Result<()> {
 
     let config = Arc::new(config);
     let inner_config = config.clone();
+    let cookie_key = get_secret_key(&config.auth.cookie_storage)?;
     HttpServer::new(move || {
         App::new()
             .app_data(Data::new(schema.clone()))
             .app_data(Data::new(file_db.clone()))
             .app_data(Data::new(inner_config.clone()))
             .wrap(
-                CookieSession::signed(&[0; 32])
-                    .secure(false)
-                    .path("/")
-                    .http_only(true)
-                    .same_site(SameSite::Strict)
-                    .expires_in(60 * 60 * 24 * 365),
+                SessionMiddleware::builder(CookieSessionStore::default(), cookie_key.clone())
+                    .cookie_secure(false)
+                    .cookie_path("/".to_owned())
+                    .cookie_http_only(true)
+                    .cookie_same_site(SameSite::Strict)
+                    .session_lifecycle(BrowserSession::default().state_ttl(Duration::days(1)))
+                    .build(),
             )
             .service(user_session::login)
             .service(user_session::logout)

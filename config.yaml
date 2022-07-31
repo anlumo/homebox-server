@@ -16,3 +16,4 @@ database:
 
 auth:
   password: 123abc
+  cookie_storage: cookie.key

@@ -1,4 +1,9 @@
-use std::{error::Error, fs::read_to_string, net::SocketAddr, path::Path};
+use std::{
+    error::Error,
+    fs::read_to_string,
+    net::SocketAddr,
+    path::{Path, PathBuf},
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -16,6 +21,7 @@ pub struct Database {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Auth {
     pub password: String,
+    pub cookie_storage: PathBuf,
 }
 
 #[derive(Deserialize)]
