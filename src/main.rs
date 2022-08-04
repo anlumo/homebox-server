@@ -8,7 +8,7 @@ use std::{
 };
 
 use actix_session::{
-    config::BrowserSession, storage::CookieSessionStore, Session, SessionMiddleware,
+    config::PersistentSession, storage::CookieSessionStore, Session, SessionMiddleware,
 };
 use actix_web::{
     cookie::{time::Duration, Key, SameSite},
@@ -123,7 +123,9 @@ async fn main() -> std::io::Result<()> {
                     .cookie_path("/".to_owned())
                     .cookie_http_only(true)
                     .cookie_same_site(SameSite::Strict)
-                    .session_lifecycle(BrowserSession::default().state_ttl(Duration::days(1)))
+                    .session_lifecycle(
+                        PersistentSession::default().session_ttl(Duration::days(365)),
+                    )
                     .build(),
             )
             .service(user_session::login)
